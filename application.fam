@@ -1,0 +1,10 @@
+App(
+    appid="ir_jam",
+    name="IR Jammer",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="ir_jam_app",
+    requires=["gui"],
+    stack_size=4 * 1024,
+    fap_category="Infrared",
+    fap_icon="icon.png",
+)
