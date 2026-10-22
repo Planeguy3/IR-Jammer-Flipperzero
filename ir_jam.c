@@ -43,7 +43,7 @@ static const char* INFO[] = {
     "Range = IR LED range,",
     "a couple meters.",
     "",
-    "Use on your own gear.",
+    "Only test your stuff",
 };
 #define NINFO (sizeof(INFO) / sizeof(INFO[0]))
 #define IVIS 5
@@ -56,28 +56,26 @@ typedef struct {
     FuriMessageQueue* inq;
     FuriTimer* timer;
     Scr scr;
-    uint8_t msel, ssel, ioff;      // selected row on each screen
-    uint8_t mode, fi, di, mni, mxi; // settings, stored as indexes into the preset tables above
-    // these three get touched from the IR callback (runs in interrupt context)
-    // so they have to be volatile or the compiler will happily cache stale reads
+    uint8_t msel, ssel, ioff;      // Dont know if anybody will read this but i kinda want to add comments 
+    uint8_t mode, fi, di, mni, mxi; // settings stored as presets
+    // these three get used by IR callback
+    // more setup
     volatile bool run, led, lvl, stopr;
     volatile uint32_t seed;
 } App;
 
-// called back by the IR hal every time it needs the next mark/space duration.
-// this runs at interrupt priority so keep it fast - no snprintf, no mallocs, nothing slow
+// this keeps it fast
 static FuriHalInfraredTxGetDataState jcb(void* ctx, uint32_t* dur, bool* lvl) {
     App* a = ctx;
 
-    // stopr lets the main thread ask the ISR to wind down cleanly instead of
-    // just yanking the TX line, otherwise furi_hal_infrared gets upset
+    // controls stopping the ir jam
     if(a->stopr) {
         *dur = 100;
         *lvl = false;
         return FuriHalInfraredTxGetDataStateLastDone;
     }
 
-    // cheap xorshift, don't need anything fancier for noise pulses
+    // already getting lazy with this
     uint32_t s = a->seed;
     s ^= s << 13;
     s ^= s >> 17;
@@ -85,7 +83,7 @@ static FuriHalInfraredTxGetDataState jcb(void* ctx, uint32_t* dur, bool* lvl) {
     a->seed = s;
 
     uint16_t mn = MINPS[a->mni], mx = MAXPS[a->mxi];
-    if(mx <= mn) mx = mn + 100; // shouldn't happen with the current presets but just in case
+    if(mx <= mn) mx = mn + 100; // extra protection
     uint32_t span = mx - mn;
     if(!span) span = 1;
 
@@ -101,8 +99,7 @@ static void buzz(void) {
     furi_hal_vibro_on(false);
 }
 
-// drops any input events that piled up in the queue while we were busy -
-// without this, a button mash during start/stop replays itself right after
+// protection against button mashing children
 static void drain_queue(App* a) {
     InputEvent e;
     while(furi_message_queue_get(a->inq, &e, 0) == FuriStatusOk) {}
@@ -111,8 +108,7 @@ static void drain_queue(App* a) {
 static void jstop(App* a) {
     if(a->run) {
         a->stopr = true;
-        // blocks until the ISR actually sees stopr and bails out on its own -
-        // without this the TX can keep firing for a bit after we think it's stopped
+        // without this the TX can keep firing for a bit after it is supposed to have stopped
         furi_hal_infrared_async_tx_wait_termination();
         a->run = false;
     }
@@ -128,8 +124,7 @@ static void jstart(App* a) {
 
     uint32_t freq = a->mode == 0 ? 38000 : FREQS[a->fi];
     float duty = a->mode == 0 ? 0.33f : DUTYS[a->di] / 100.0f;
-    // the infrared hal asserts if duty isn't strictly between 0 and 1, our
-    // preset table can't actually produce that but clamp it anyway
+    // this is my favorate part of the code 
     if(duty <= 0.0f) duty = 0.05f;
     if(duty >= 1.0f) duty = 0.95f;
 
@@ -140,8 +135,7 @@ static void jstart(App* a) {
     drain_queue(a);
 }
 
-// runs every 80ms regardless of what screen we're on - just handles the LED
-// blink and nudges the gui to redraw so the run screen's status dot animates
+// handles LED blink
 static void on_tick(void* ctx) {
     App* a = ctx;
     if(a->run) {
@@ -248,8 +242,7 @@ int32_t ir_jam_app(void* p) {
     if(!a) return 1;
     memset(a, 0, sizeof(App));
 
-    // defaults: 38kHz / 33% duty / 300-600us pulses - wide enough that the
-    // isr rate doesn't choke button input, learned that one the hard way
+    // i hate this part
     a->mode = 0; a->fi = 3; a->di = 3; a->mni = 1; a->mxi = 1;
     a->scr = ScrMenu;
 
@@ -272,12 +265,9 @@ int32_t ir_jam_app(void* p) {
     bool running = true;
     InputEvent e;
 
-    // main loop - everything is driven off the input queue, 100ms timeout just
-    // keeps the screen redrawing even with no button presses
+    // main loop - very good
     while(running) {
         if(furi_message_queue_get(a->inq, &e, 100) == FuriStatusOk) {
-            // run screen handles its own keys separately since OK/Back here
-            // need to touch the IR hardware, not just move a cursor around
             if(a->scr == ScrRun) {
                 if(e.type == InputTypeShort) {
                     if(e.key == InputKeyOk) {
@@ -358,3 +348,5 @@ int32_t ir_jam_app(void* p) {
     free(a);
     return 0;
 }
+
+// This took longer to make then it should have
